@@ -1,0 +1,7 @@
+streamlit
+requests
+pymupdf
+rapidocr-onnxruntime
+groq
+plotly
+python-dotenv
