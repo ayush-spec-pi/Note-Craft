@@ -6,3 +6,4 @@ venv/
 .streamlit/secrets.toml
 .DS_Store
 weak_spots.json
+.vscode
