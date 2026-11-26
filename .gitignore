@@ -7,3 +7,5 @@ venv/
 .DS_Store
 weak_spots.json
 .vscode
+
+.vscode
