@@ -78,6 +78,7 @@ def generate_study_pack(
 === LECTURE AUDIO TRANSCRIPT / TEACHER HINTS ===
 {audio_chunk}
 
+If the provided PDF/transcript does not match the requested Subject or Unit, start with a clear mismatch warning instead of making things up.
 Generate a clean exam revision pack with these exact sections:
 ### 1. Teacher Spotlight (Exam Hints & Traps)
 Extract any emphasized topics, repeated derivations, edge cases, or exam warnings from the transcript (if no transcript is provided, highlight the top 3 high-weightage exam traps from the notes).

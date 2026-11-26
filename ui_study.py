@@ -1,7 +1,11 @@
+import json
+from pathlib import Path
 import streamlit as st
 from processor import process_multiple_pdfs
 from transcriber import transcribe_audio
 from llm_engine import generate_study_pack
+
+CATALOG_PATH = Path("drive_catalog.json")
 
 SAMPLE_TRANSCRIPT = (
     "Pay very close attention here—I am spending 10 minutes repeating the AVL LR double rotation "
@@ -11,6 +15,64 @@ SAMPLE_TRANSCRIPT = (
     "Also remember for Infix to Postfix: exponent '^' is right-associative, so DO NOT pop an existing '^' on stack."
 )
 
+
+def load_catalog() -> dict:
+    if not CATALOG_PATH.exists():
+        return {}
+    try:
+        with CATALOG_PATH.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def get_subjects_from_catalog(catalog: dict, year: str, cycle: str, branch: str) -> list[str]:
+    branch_node = (
+        catalog.get(year, {})
+        .get(cycle, {})
+        .get(branch, {})
+    )
+    if isinstance(branch_node, dict):
+        return list(branch_node.keys())
+    return []
+
+
+def render_subject_and_topic(profile: dict) -> tuple[str, str, str, dict]:
+    catalog = load_catalog()
+    year = profile.get("year", "1st Year")
+    cycle = profile.get("cycle", "Physics Cycle")
+    branch = profile.get("branch", "CS Stream")
+
+    subjects = get_subjects_from_catalog(catalog, year, cycle, branch)
+    options = subjects + ["Other / Custom"] if subjects else ["Other / Custom"]
+
+    c_sub, c_top = st.columns(2)
+    selected = c_sub.selectbox("Subject", options=options)
+    topic_keyword = c_top.text_input(
+        "Specific Topic (Optional)",
+        placeholder="e.g. AVL Rotation"
+    )
+
+    unit_name = st.text_input(
+        "Unit Name *",
+        placeholder="e.g. Trees & Graphs"
+    ).strip()
+
+    if selected == "Other / Custom":
+        custom_subject = st.text_input(
+            "Custom Subject Name",
+            placeholder="e.g. Data Structures & Algorithms"
+        ).strip()
+        return custom_subject, unit_name, topic_keyword, {}
+
+    subject_meta = (
+        catalog.get(year, {})
+        .get(cycle, {})
+        .get(branch, {})
+        .get(selected, {})
+    )
+    return selected, unit_name, topic_keyword, subject_meta if isinstance(subject_meta, dict) else {}
 
 def render_study_tab(profile: dict):
     left, right = st.columns([1, 1.45], gap="large")
@@ -38,12 +100,7 @@ def render_study_tab(profile: dict):
                 label_visibility="collapsed"
             )
 
-            c_sub, c_top = st.columns(2)
-            subject = c_sub.text_input("Subject", value="Data Structures & Algorithms")
-            topic_keyword = c_top.text_input(
-                "Specific Topic (Optional)",
-                placeholder="e.g. AVL Rotation"
-            )
+            subject, unit_name, topic_keyword, subject_meta = render_subject_and_topic(profile)
 
             uploaded_pdfs = []
             if mode == "Manual Upload":
@@ -53,10 +110,23 @@ def render_study_tab(profile: dict):
                     accept_multiple_files=True
                 )
             else:
+                notes_count = len(subject_meta.get("notes_file_ids", [])) if subject_meta else 0
+                pyqs_count = len(subject_meta.get("pyqs_file_ids", [])) if subject_meta else 0
+                has_folder = bool(
+                    subject_meta.get("notes_folder_url") or subject_meta.get("pyqs_folder_url")
+                ) if subject_meta else False
+
+                catalog_status = (
+                    f"Linked in catalog: <b>{notes_count} note file(s)</b> · <b>{pyqs_count} PYQ file(s)</b>"
+                    if (notes_count or pyqs_count)
+                    else ("Folder link configured in catalog." if has_folder else "No Drive entries linked for this subject yet.")
+                )
+
                 st.markdown(
                     f"""
                     <div style="border:1px solid #FDE68A; background:#FFFBEB; color:#92400E; border-radius:10px; padding:12px 14px; font-size:12px; line-height:1.5; margin:6px 0 12px 0;">
-                        <strong>Drive DB Scope:</strong> {profile['year']} → {profile['cycle']} → {profile['branch']}<br/>
+                        <strong>Drive DB Scope:</strong> {profile.get('year', '1st Year')} → {profile.get('cycle', 'Physics Cycle')} → {profile.get('branch', 'CS Stream')}<br/>
+                        {catalog_status}<br/>
                         Live <code>drive_catalog.json</code> sync is scheduled for the full build. Use <b>Manual Upload</b> or <b>Audio</b> to test the pipeline right now.
                     </div>
                     """,
@@ -121,16 +191,21 @@ def render_study_tab(profile: dict):
             )
 
             if generate_btn:
-                if not uploaded_pdfs and not audio_file and not manual_transcript.strip():
+                if not subject:
+                    st.warning("Please select a subject or enter a custom subject name.")
+                elif not unit_name:
+                    st.warning("Please enter a Unit Name so the AI doesn't try to summarize the entire syllabus.")
+                elif not uploaded_pdfs and not audio_file and not manual_transcript.strip():
                     st.warning("Please upload at least one PDF, an audio file, or a transcript before generating notes.")
                 else:
                     pdf_text = ""
                     final_transcript = manual_transcript.strip()
+                    combined_focus = " - ".join(p for p in [unit_name, topic_keyword.strip()] if p)
 
                     try:
                         if uploaded_pdfs:
                             with st.spinner("Scanning PDFs (Typed + RapidOCR)..."):
-                                pdf_text = process_multiple_pdfs(uploaded_pdfs, topic_keyword)
+                                pdf_text = process_multiple_pdfs(uploaded_pdfs,combined_focus)
 
                         if audio_file:
                             with st.spinner("Transcribing classroom audio via Groq Whisper..."):
@@ -143,10 +218,11 @@ def render_study_tab(profile: dict):
                                 pdf_text=pdf_text,
                                 transcript=final_transcript,
                                 subject=subject,
-                                topic=topic_keyword
+                                topic=combined_focus
                             )
                             st.session_state["last_notes"] = notes_md
                             st.session_state["last_model"] = used_model
+                            st.session_state["last_subject"] = subject
                             st.rerun()
 
                     except Exception as e:
@@ -160,12 +236,13 @@ def render_study_tab(profile: dict):
                 st.markdown(st.session_state["last_notes"])
 
                 st.write("")
+                active_subject = st.session_state.get("last_subject", subject or "study_pack")
                 b1, b2 = st.columns([1, 3])
                 with b1:
                     st.download_button(
                         "Download .md",
                         data=st.session_state["last_notes"],
-                        file_name=f"{subject.lower().replace(' ', '_')}_notes.md",
+                        file_name=f"{active_subject.lower().replace(' ', '_')}_notes.md",
                         mime="text/markdown",
                         use_container_width=True
                     )
@@ -173,6 +250,7 @@ def render_study_tab(profile: dict):
                     if st.button("Clear Workspace"):
                         st.session_state.pop("last_notes", None)
                         st.session_state.pop("last_transcript", None)
+                        st.session_state.pop("last_subject", None)
                         st.rerun()
             else:
                 st.markdown(
